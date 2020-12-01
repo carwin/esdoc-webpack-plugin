@@ -1,6 +1,6 @@
 {
   "name": "esdoc-webpack-plugin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Webpack plugin to run esdoc on files",
   "main": "index.js",
   "scripts": {
@@ -15,7 +15,7 @@
     "webpack"
   ],
   "author": "Carwin Young <carwinyoung+npm@gmail.com>",
-  "license": "MIT",
+  "license": "ISC",
   "bugs": {
     "url": "https://github.com/carwin/esdoc-webpack-plugin/issues"
   },
