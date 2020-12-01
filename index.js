@@ -1,121 +1,38 @@
 /**
- * @file A webpack plugin to run esdoc on compile / recompile.
+ * A webpack plugin to run esdoc on compile / recompile.
+ * @file
  */
-
 const webpack = require('webpack');
 const path = require('path');
 const spawn = require('child_process').spawn;
 const fse = require('fs-extra');
 const chalk = require('chalk');
-
 const validateOptions = require('schema-utils');
 
-// Schema for options object.
-const schema = {
-    type: 'object',
-    properties: {
-        conf: {
-            type: 'string',
-        },
-        cwd: {
-            type: 'string',
-        },
-        preserveTmpFile: {
-            type: 'boolean',
-        },
-        showOutput: {
-            type: 'boolean',
-        }
-    },
-};
-
-const isWindows = /^win/.test(process.platform);
-
-const PLUGIN_NAME = 'ESDocPlugin';
-
-const ESDOC_FILES = isWindows ? [] : [
-    'node_modules/.bin/esdoc',
-    'node_modules/esdoc/esdoc.js',
-];
-
 /**
- * Look for files in directories.
- */
-const lookupFile = (files, dirs) => {
-    let found = null;
-
-    [].concat(files).some(function (filename) {
-        return [].concat(dirs).some(function (dirname) {
-            var file = path.resolve(path.join(dirname, filename));
-
-            if (fse.existsSync(file)) {
-                return found = file;
-            }
-        });
-    });
-
-    return found;
-};
-
-const getLongestCommonSharedDirectory = (s) => {
-    let k = s[0].Length;
-    for (let i = 1; i < s.length; i++) {
-        k = Math.Min(k, s[i].length);
-        for (let j = 0; j < k; j++) {
-            if (s[i][j] != s[0][j]) {
-                k = j;
-                break;
-            }
-        }
-    }
-    const fullPath = s[0].substring(0, k);
-    return fullPath.substring(0, fullPath.lastIndexOf('/'));
-}
-
-/**
- * Reads the esdoc config
- *
- * @param {string} filepath - The path to the file.
- * @returns {any}
- */
-const readConfigFile = (filepath) => {
-    delete require.cache[filepath];
-    return require(filepath);
-};
-
-/**
- * Converts milliseconds to minutes:seconds.
- *
- * @param {number} millis - A millisecond value.
- * @returns {string} - A string in the format mm:ss.
- */
-const millisToMinutesAndSeconds = (millis) => {
-    var minutes = Math.floor(millis / 60000);
-    var seconds = ((millis % 60000) / 1000).toFixed(0);
-    return minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
-};
-
-/**
- * Defines the main ESDocPlugin.
+ * ESDoc Plugin
  *
  * @class
- * @type {WebpackPlugin}
- * @todo Running webpack in watch mode causes compile to happen twice.
- * @todo Validate constructor options.
- * @todo Cleanly merge options passed to the constructor with default options. Lodash's merge is nice, but I don't want another dep.
- * @todo Test it.
- * @todo Try setting some params from the webpack plugin instance.
- * @todo Handle cases where we can't find the config file.
+ * @classdesc The primary entry point of the Webpack plugin.
  */
 module.exports = class Plugin {
+    /**
+     * Instantiates the Plugin class.
+     *
+     * @param {Object} opts - The options passed to the plugin from Webpack configuration.
+     * @param {string} [opts.source='./src'] - The directory in which to look for files to process.
+     * @param {string} [opts.destination='./docs'] - A default value for destination, just in case.
+     */
     constructor(opts = {source: './src', destination: './docs'}) {
-        validateOptions(schema, opts, 'ESDoc webpack plugin');
+        // Validate the opts the constructor received.
+        validateOptions(this.schema(), opts, 'ESDoc Webpack plugin');
+        // Define default options.
         const defaultOptions = {
             conf: '.esdoc.json', // Default config file name.
             cwd: opts.cwd || './', // Default path for lookup.
             preserveTmpFile: true, // Keep the generated temporary settings file?
             showOutput: false, // Show all the output from esdoc?
-            // esdoc option defaults, just in case.
+            // ESDoc option defaults, just in case.
             source: './src',
             destination: './docs',
             excludes: ['\\.config\\.js', '\\.babel\\.js'],
@@ -124,44 +41,172 @@ module.exports = class Plugin {
             }],
         };
 
-        // Merge options
-        // opts passed to the constructor will override default values.
+        /**
+         * Merge the opts and defaultOptions objects, letting any passed information from
+         * opts override a corresponding defaultOptions version.
+         *
+         * @type {Object}
+         * @property {Object} options.defaultOptions - A default set of options.
+         * @property {Object} options.opts - The options passed to the constructor from Webpack.
+         */
         this.options = {...defaultOptions, ...opts};
+        /**
+         * The name of the Plugin.
+         *
+         * @type {string}
+         */
+        this.pluginName = 'ESDocPlugin';
 
+        // If the user has chosen to show output, output information about the finalized
+        // options the plugin will use.
         if (this.options.showOutput) {
-            console.log(chalk.yellow('ESDocPlugin:'), 'Options', this.options);
+            console.log(chalk.yellow(`${pluginName}:`), 'Initializing with Options:', this.options);
         }
     }
+    /**
+     * Defines the schema to validate against for the Plugin constructor's parameters .
+     *
+     * @return {Object} An Object containing schema definitions.
+     * @property {string} type - What type to expect.
+     * @property {Object} properties - The properties to validate in the constructor.
+     */
+    schema() {
+        return {
+            type: 'object',
+            properties: {
+                conf: {
+                    type: 'string',
+                },
+                cwd: {
+                    type: 'string',
+                },
+                preserveTmpFile: {
+                    type: 'boolean',
+                },
+                showOutput: {
+                    type: 'boolean',
+                }
+            },
+        };
+    }
 
-    apply(compiler) {
-        const self = this;
-        const options = self.options;
-        const cwd = process.cwd();
-        const givenDirectory = options.cwd;
-        let preserveTmpFile = options.preserveTmpFile;
-        let esdocConfig = path.resolve(givenDirectory, options.conf);
-        const esdocConfigDir = path.dirname(esdocConfig);
-        const files = [];
-        let cmd;
-        let obj = {};
-        let tmpFile;
-        let esdocArgs;
-        let esdoc;
-        let esdocErrors = [];
+    /**
+     * Converts milliseconds to minutes:seconds.
+     *
+     * @param {number} millis - A millisecond value.
+     * @return {string} - A string in the format mm:ss.
+     */
+    millisToMinutesAndSeconds(millis) {
+        var minutes = Math.floor(millis / 60000);
+        var seconds = ((millis % 60000) / 1000).toFixed(0);
+        return minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
+    }
 
-        compiler.hooks.watchRun.tapAsync(PLUGIN_NAME, (compiler, callback) => {
-            console.log(chalk.yellow('ESDocPlugin'), chalk.magenta('Watching for changes...'));
-            callback();
+    /**
+     * Reads the ESDoc config.
+     *
+     * @param {string} filepath - The path to the file.
+     * @return {(Object | null)} - Either a JSON object or null.
+     */
+    readConfigFile(filepath) {
+        delete require.cache[filepath];
+        return fse.readJsonSync(filepath, { throws: false });
+    };
+
+    /**
+     * Checks whether or not Node's process.platform returns a string beginning with "win".
+     * If it's true, it can be inferred that Webpack is running on a Windows system.
+     *
+     * @return {boolean} - Whether or not the plugin is running on a Windows environment.
+     */
+    isWindowsEnv() {
+        return /^win/.test(process.platform);
+    }
+    /**
+     * Sets the location for the ESDoc files.
+     *
+     * @return {Array<string>} An array of normal locations for the ESDoc executabble.
+     */
+    getESDocFiles() {
+        return this.isWindowsEnv() ? [
+            'node_modules/.bin/jsdoc.cmd'
+        ] : [
+            'node_modules/.bin/esdoc',
+            'node_modules/esdoc/esdoc.js',
+        ];
+    }
+
+    /**
+     * Gets the longest shared directory from an array of filepaths.
+     *
+     * @param {array} s - An array of filepaths.
+     * @return {string} The longest shared directory from s.
+     */
+    getLongestCommonSharedDirectory(s) {
+        let k = s[0].length;
+        for (let i = 1; i < s.length; i++) {
+            k = Math.min(k, s[i].length);
+            for (let j = 0; j < k; j++) {
+                if (s[i][j] != s[0][j]) {
+                    k = j;
+                    break;
+                }
+            }
+        }
+        const fullPath = s[0].substring(0, k);
+        return fullPath.substring(0, fullPath.lastIndexOf('/'));
+    }
+
+    /**
+     * Looks for files given two arrays
+     *
+     * @param {Array<string>} files - An array of files.
+     * @param {Array<string>} dirs - An array of directories.
+     * @return {(null | boolean)} Whether or not a file was found.
+     */
+    lookupFile(files, dirs) {
+        let found = null;
+
+        // On each of the files array items (as filename), concat an empty array on the dirs array.
+        [].concat(files).some(function (filename) {
+            // On each item in that (as dirname) array, create an absolute filepath using dirname and filename.
+            return [].concat(dirs).some(function (dirname) {
+                var file = path.resolve(path.join(dirname, filename));
+
+                // If that file exists on the filesystem, set found to true.
+                if (fse.existsSync(file)) {
+                    return found = file;
+                }
+            });
         });
 
-        const promiseEsdoc = (esdoc, cmd, esdocArgs, esdocConfigDir, esdocErrors, tmpFile) => new Promise((resolve, reject) => {
-            esdoc = spawn(cmd, esdocArgs, {
+        // Return whether or not found was true.
+        return found;
+    };
+    /**
+     * Runs the ESDoc executable.
+     *
+     * @param {string} cmd - The path of the ESDoc executable.
+     * @param {Array<string>} esdocArgs - An array of arguments to pass to the ESDoc executable.
+     * @param {string} esdocConfigDir - The directory in which ESDoc's configuration lives. This should be where ESDocPlugin outputs the tmpFile.
+     * @param {string} tmpFile - The full path to the tmpFile. Used for checking whether it exists or not.
+     * @return {Promise} The Promise returned by the function.
+     */
+    promiseEsdoc(cmd, esdocArgs, esdocConfigDir, tmpFile) {
+        let esdocErrors = [];
+        return new Promise((resolve, reject) => {
+            const esdoc = spawn(cmd, esdocArgs, {
                 cwd: esdocConfigDir,
             });
-            if (obj.showOutput) {
-                // Collect the socket output from esdoc, turning the buffer into something readable.
-                console.log(chalk.yellow('ESDocPlugin:'), 'Beginning output.');
+            // If showOutput is true, collect the socket output from esdoc, turning
+            // the buffer into something readable.
+            if (this.options.showOutput) {
                 let received = '';
+
+                // Tell the user it's about to start.
+                console.log(chalk.yellow(`${pluginName}:`), 'Beginning output.');
+
+                // Upon receiving data:
                 esdoc.stdout.on('data', (data) => {
                     received += data;
                     const messages = received.split('\n');
@@ -177,30 +222,76 @@ module.exports = class Plugin {
                     }
                 });
             }
+            // Upon an error:
             esdoc.stderr.on('data', (data) => esdocErrors.push(data.toString()));
+
+            // Upon socket close:
             esdoc.on('close', (closeCode) => {
-                // Remove that tmp file if we have one and we aren't keeping it.
-                if (tmpFile && !preserveTmpFile) {
-                    console.log(chalk.yellow('ESDocPlugin:'), 'Removing temporary esdoc config file...');
+                // Remove that tmp file, if one exists, and the user has chosen not to preserve it.
+                if (tmpFile && !this.options.preserveTmpFile) {
+                    console.log(chalk.yellow(`${this.pluginName}:`), 'Removing temporary esdoc config file...');
                     fse.unlinkSync(tmpFile);
-                    tmpFile = null;
                 }
                 if (esdocErrors.length > 0) {
                     esdocErrors.forEach((value) => console.error(value));
-                    reject(new Error(chalk.yellow('ESDocPlugin:'), 'Exited with code ' + code));
+                    reject(new Error(chalk.yellow(`${this.pluginName}:`), 'Exited with code ' + code));
                 } else {
-                    console.log(chalk.yellow('ESDocPlugin:'), 'Emitted files to output directory.');
+                    console.log(chalk.yellow(`${this.pluginName}:`), 'Emitted files to output directory.');
                     resolve(true);
                 }
             });
         });
+    }
+    /**
+     * The apply method Webpack plugins must declare.
+     *
+     * @param {object} compiler - The Webpack compiler object.
+     * @see https://webpack.js.org/contribute/writing-a-plugin/#basic-plugin-architecture
+     * @todo Look into AsyncSeriesHook, it might help make things cleaner.
+     */
+    apply(compiler) {
+        const self = this;
+        const options = self.options;
+        const cwd = process.cwd();
+        const esdocFiles = self.getESDocFiles();
+        const givenDirectory = options.cwd;
+        const files = [];
+        const pluginName = self.pluginName;
+        const preserveTmpFile = options.preserveTmpFile;
 
-        compiler.hooks.emit.tapAsync(PLUGIN_NAME, (compilation, callback) => {
-            console.log(chalk.yellow('ESDocPlugin:'), 'Compiling...');
-            console.log('EMITTING');
+        let cmd,
+            esdoc,
+            esdocArgs,
+            esdocConfig = path.resolve(givenDirectory, options.conf),
+            esdocConfigDir = path.dirname(esdocConfig),
+            obj = {},
+            tmpFile = null,
+            tmp,
+            tmpFilename,
+            tmpFilepath;
 
-            // Look for esdoc and when we find it, set it to cmd.
-            cmd = lookupFile(ESDOC_FILES, [
+        /**
+         * Hooks into watchRun using tapAsync().
+         *
+         * @external {compiler.hooks.watchRun.tapAsync} https://webpack.js.org/api/compiler-hooks/#watchrun
+         */
+        compiler.hooks.watchRun.tapAsync(pluginName, (compiler, callback) => {
+            // During the Webpack watchRun event, notify the user that the plugin is watching for changes.
+            console.log(chalk.yellow(`${pluginName}`), chalk.magenta('Watching for changes...'));
+            callback();
+        });
+
+        /**
+         * Hooks into emit using tapAsync().
+         *
+         * @external {compiler.hooks.emit.tapAsync} https://webpack.js.org/api/compiler-hooks/#emit
+         */
+        compiler.hooks.emit.tapAsync(pluginName, (compilation, callback) => {
+            // Let the user know ESDocPlugin is running.
+            console.log(chalk.yellow(`${pluginName}:`), 'Compiling...');
+
+            // Look for ESDoc and when found, set it to cmd.
+            cmd = self.lookupFile(esdocFiles, [
                 // config dir
                 esdocConfigDir,
                 // given dir
@@ -210,32 +301,33 @@ module.exports = class Plugin {
                 // Here
                 __dirname,
             ]);
-            // Wait a second... is esdoc installed?
+
+            // If the ESDoc executable was not found, exit.
             if (!cmd) {
-                callback(new Error(chalk.yellow('ESDocPlugin:'), 'esdoc was not found.'));
+                callback(new Error(chalk.yellow(`${pluginName}:`), 'ESDoc was not found, exiting.'));
             }
             // See if esdocConfig exists, if it does, set it to obj, otherwise have an exception.
             if (fse.existsSync(esdocConfig)) {
                 try {
-                    obj = readConfigFile(esdocConfig);
+                    obj = self.readConfigFile(esdocConfig);
                 } catch (exception) {
                     callback(exception);
                     return;
                 }
             }
 
-            // If we have a config file, use it. Otherwise handle it.
+            // If there is a config file, use it. Otherwise handle it.
             if (obj.source && obj.includes) {
-                console.log(chalk.yellow('ESDocPlugin:'), 'Pulling data from the configuration file.');
-                // Merge the configuration file with the options object sent from webpack.
+                console.log(chalk.yellow(`${pluginName}:`), 'Pulling data from the configuration file.');
+                // Merge the configuration file with the options object sent from Webpack.
                 // If a user decided to set some options when they called `new Plugin()`,
-                // and still pointed to a config file, we can assume the instance settings
-                // they passed should take priority.
+                // and still pointed to a config file, it can be assumed that the instance
+                // settings passed should take priority.
                 // Some of the keys that end up in here may not be useful.
                 obj = {...obj, ...options}; // lodash would be better for this because it can do deep merges, but I just don't want it.
             }
             else {
-                console.log(chalk.yellow('ESDocPlugin:'), 'Provided configuration either not found or does not contain an includes key. Generating from the bundles.')
+                console.log(chalk.yellow(`${pluginName}:`), 'Provided configuration either not found or does not contain an includes key. Generating from the bundles.')
                 // If our options object doesn't have includes, let's generate them from the bundles.
                 compilation.fileDependencies.forEach((filepath, i) => {
                     // Excludes this expression from out file path collection.
@@ -243,47 +335,59 @@ module.exports = class Plugin {
                     var inclusion = /index.js$/.test(filepath);
 
                     // Collect all our js files.
-                    if (!exception && inclusion) {
+                    if (!exception && inclusion && !files.includes(filepath)) {
                         files.push(filepath);
                     }
                 });
 
                 // Get the shared parent directory of all our files, that's the src.
-                obj.source = getLongestCommonSharedDirectory(files);
+                obj.source = self.getLongestCommonSharedDirectory(files);
                 obj = {...obj, ...options};
             }
 
-            // Since we're generating config, we'll store it in a tmp file to pass to the esdoc executable.
-            tmpFile = esdocConfig + '.tmp';
-            console.log(chalk.yellow('ESDocPlugin:'), 'Writing temporary file at: ', tmpFile);
+            // Since a config file is being generated, store it in a tmp file to pass to the ESDoc executable.
+            tmp = path.parse(esdocConfig);
+            tmpFilename = tmp.base;
+            tmpFilepath = tmp.dir;
+            if (/\.tmp$/.test(tmpFilename)) {
+                tmpFile = tmpFilepath + '/' + tmpFilename;
+            } else {
+                tmpFile = tmpFilepath + '/' + tmpFilename + '.tmp';
+            }
+            // Let the user know ESDocPlugin is writing a file.
+            console.log(chalk.yellow(`${pluginName}:`), 'Writing temporary file at: ', tmpFile);
             fse.writeFileSync(tmpFile, JSON.stringify(obj));
             esdocConfig = tmpFile;
 
-            console.log(chalk.yellow('ESDocPlugin:'), 'Using esdoc located at', cmd);
+            // Alert the user that ESDocPlugin is going to be reading the file that was written.
+            console.log(chalk.yellow(`${pluginName}:`), 'Using esdoc located at', cmd);
 
-            // Esdoc doesn't actually have a lot of cli arguments.
-            // Here we just point it to our config file.
+            // Set the command line options for ESDoc. Point to the created config file.
             esdocArgs = ['-c', esdocConfig];
 
+            // End the emit hook.
             callback();
         });
 
-        // Report when finished.
-        compiler.hooks.done.tap(PLUGIN_NAME, (stats) => {
-            // @TODO: Really this run of esdoc as a child process should probably happen in the emit hook,
+        /**
+         * Hooks into done using tap().
+         *
+         * @external {compiler.hooks.done.tapAsync} https://webpack.js.org/api/compiler-hooks/#done
+         */
+        compiler.hooks.done.tap(pluginName, (stats) => {
+            // @TODO: Really this run of ESDoc as a child process should probably happen in the emit hook,
             //        but if it's there, watching makes emit trigger twice on startup. I'm guessing the
             //        reason this happens is that emit finishes before the subprocess has totally exited,
-            //        so when it finally does end, the esdoc process creates/modifies files in the plugin
+            //        so when it finally does end, the ESDoc process creates/modifies files in the plugin
             //        output directory get created and compilation starts all over again.
-            //        I need a way to ignore the output files or directory for this plugin during watch, we
-            //        don't care if something happens there.
-            promiseEsdoc(esdoc, cmd, esdocArgs, esdocConfigDir, esdocErrors, tmpFile)
+            //        I need a way to ignore the output files or directory for this plugin during watch, it
+            //        doesn't matter if something happens there.
+            this.promiseEsdoc(cmd, esdocArgs, esdocConfigDir, tmpFile, obj)
             .then(response => {
-                console.log(chalk.yellow('ESDocPlugin:'), 'Finished compiling.');
-                console.log(chalk.yellow('ESDocPlugin:'), 'Total run time ', chalk.green(millisToMinutesAndSeconds(stats.endTime - stats.startTime)));
+                console.log(chalk.yellow(`${pluginName}:`), 'Finished compiling.');
+                console.log(chalk.yellow(`${pluginName}:`), 'Total run time ', chalk.green(self.millisToMinutesAndSeconds(stats.endTime - stats.startTime)));
             })
         });
-
 
     }
 };
