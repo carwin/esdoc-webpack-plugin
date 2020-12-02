@@ -4,7 +4,7 @@
  */
 const webpack = require('webpack');
 const path = require('path');
-const spawn = require('child_process').spawn;
+const spawn = require('child_process').spawnSync;
 const fse = require('fs-extra');
 const chalk = require('chalk');
 const validateOptions = require('schema-utils');
@@ -60,7 +60,7 @@ module.exports = class Plugin {
         // If the user has chosen to show output, output information about the finalized
         // options the plugin will use.
         if (this.options.showOutput) {
-            console.log(chalk.yellow(`${pluginName}:`), 'Initializing with Options:', this.options);
+            console.log(chalk.yellow(`${this.pluginName}:`), 'Initializing with Options:', this.options);
         }
     }
     /**
@@ -192,55 +192,64 @@ module.exports = class Plugin {
      * @param {string} tmpFile - The full path to the tmpFile. Used for checking whether it exists or not.
      * @return {Promise} The Promise returned by the function.
      */
-    promiseEsdoc(cmd, esdocArgs, esdocConfigDir, tmpFile) {
+    Esdoc(cmd, esdocArgs, esdocConfigDir, tmpFile) {
         let esdocErrors = [];
-        return new Promise((resolve, reject) => {
-            const esdoc = spawn(cmd, esdocArgs, {
-                cwd: esdocConfigDir,
-            });
-            // If showOutput is true, collect the socket output from esdoc, turning
-            // the buffer into something readable.
-            if (this.options.showOutput) {
-                let received = '';
-
-                // Tell the user it's about to start.
-                console.log(chalk.yellow(`${pluginName}:`), 'Beginning output.');
-
-                // Upon receiving data:
-                esdoc.stdout.on('data', (data) => {
-                    received += data;
-                    const messages = received.split('\n');
-                    if (messages.length > 1) {
-                        let printed = '';
-                        for (let message of messages) {
-                            if (message !== '') {
-                                let split = (message.toString().split(':'));
-                                console.log(`${chalk.blue(split[0])}: ${chalk.green(split[1])}`);
-                                received = '';
-                            }
-                        }
-                    }
-                });
-            }
-            // Upon an error:
-            esdoc.stderr.on('data', (data) => esdocErrors.push(data.toString()));
-
-            // Upon socket close:
-            esdoc.on('close', (closeCode) => {
-                // Remove that tmp file, if one exists, and the user has chosen not to preserve it.
-                if (tmpFile && !this.options.preserveTmpFile) {
-                    console.log(chalk.yellow(`${this.pluginName}:`), 'Removing temporary esdoc config file...');
-                    fse.unlinkSync(tmpFile);
-                }
-                if (esdocErrors.length > 0) {
-                    esdocErrors.forEach((value) => console.error(value));
-                    reject(new Error(chalk.yellow(`${this.pluginName}:`), 'Exited with code ' + code));
-                } else {
-                    console.log(chalk.yellow(`${this.pluginName}:`), 'Emitted files to output directory.');
-                    resolve(true);
-                }
-            });
+        const esdoc = spawn(cmd, esdocArgs, {
+            cwd: esdocConfigDir,
         });
+
+        // If showOutput is true, collect the socket output from esdoc, turning
+        // the buffer into something readable.
+        if (this.options.showOutput) {
+
+            let received = '';
+
+            // Tell the user it's about to start.
+            console.log(chalk.yellow(`${this.pluginName}:`), 'Beginning output.');
+
+            // Show the data.
+            const esdocOutput = esdoc.stdout;
+            received += esdocOutput;
+            const messages = received.split('\n');
+            // Try to make the buffer data look nicer by coloring parts.
+            const setOutputPrefixColor = (str) => {
+                let prefixes = {resolve: 'cyan', output: 'blue', parse: 'green'};
+                let prefix = str;
+                for (const key in prefixes) {
+                    if (str === key) {
+                        prefix = chalk[prefixes[key]](str);
+                        break;
+                    }
+                }
+                return prefix;
+            }
+            if (messages.length > 1) {
+                let printed = '';
+                for (let message of messages) {
+                    if (message !== '') {
+                        let split = (message.toString().split(':'));
+                        console.log(`${setOutputPrefixColor(split[0])}: ${chalk.dim(split[1])}`);
+                        received = '';
+                    }
+                }
+            }
+        }
+
+        // Remove that tmp file, if one exists, and the user has chosen not to preserve it.
+        if (tmpFile && !this.options.preserveTmpFile) {
+            console.log(chalk.yellow(`${this.pluginName}:`), 'Removing temporary esdoc config file...');
+            if (fse.existsSync(tmpFile)) {
+                fse.unlinkSync(tmpFile);
+            }
+        }
+        if ( esdoc.stderr.length > 0) {
+            console.error('ERR toString', esdoc.stderr.toString());
+            // esdocErrors.forEach((value) => console.error(value));
+            return new Error(chalk.yellow(`${this.pluginName}:`), 'Exited with code ' + esdoc.status);
+        } else {
+            console.log(chalk.yellow(`${this.pluginName}:`), 'Emitted files to output directory.');
+            return true;
+        }
     }
     /**
      * The apply method Webpack plugins must declare.
@@ -271,22 +280,17 @@ module.exports = class Plugin {
             tmpFilepath;
 
         /**
-         * Hooks into watchRun using tapAsync().
+         * Hooks into emit using tap().
          *
-         * @external {compiler.hooks.watchRun.tapAsync} https://webpack.js.org/api/compiler-hooks/#watchrun
+         * @external {compiler.hooks.shouldEmit} https://webpack.js.org/api/compiler-hooks/#shouldEmit
+         * @todo This would probably be better using the emit hook, but no matter
+         *       do it seems like it always forces two runs when watch mode is
+         *       started. Running ESDoc on the compile hook works, but eventually
+         *       it would be good to do this the webpack way with compilation
+         *       modules and chunks and stuff.
+         *       Everything works, but watch is annoying on startup.
          */
-        compiler.hooks.watchRun.tapAsync(pluginName, (compiler, callback) => {
-            // During the Webpack watchRun event, notify the user that the plugin is watching for changes.
-            console.log(chalk.yellow(`${pluginName}`), chalk.magenta('Watching for changes...'));
-            callback();
-        });
-
-        /**
-         * Hooks into emit using tapAsync().
-         *
-         * @external {compiler.hooks.emit.tapAsync} https://webpack.js.org/api/compiler-hooks/#emit
-         */
-        compiler.hooks.emit.tapAsync(pluginName, (compilation, callback) => {
+        compiler.hooks.compilation.tap(pluginName, (compilation) => {
             // Let the user know ESDocPlugin is running.
             console.log(chalk.yellow(`${pluginName}:`), 'Compiling...');
 
@@ -366,7 +370,11 @@ module.exports = class Plugin {
             esdocArgs = ['-c', esdocConfig];
 
             // End the emit hook.
-            callback();
+            try {
+                this.Esdoc(cmd, esdocArgs, esdocConfigDir, tmpFile, obj)
+            } catch (err) {
+                return new Error(pluginName, 'There was a problem running ESDoc.');
+            }
         });
 
         /**
@@ -375,18 +383,8 @@ module.exports = class Plugin {
          * @external {compiler.hooks.done.tapAsync} https://webpack.js.org/api/compiler-hooks/#done
          */
         compiler.hooks.done.tap(pluginName, (stats) => {
-            // @TODO: Really this run of ESDoc as a child process should probably happen in the emit hook,
-            //        but if it's there, watching makes emit trigger twice on startup. I'm guessing the
-            //        reason this happens is that emit finishes before the subprocess has totally exited,
-            //        so when it finally does end, the ESDoc process creates/modifies files in the plugin
-            //        output directory get created and compilation starts all over again.
-            //        I need a way to ignore the output files or directory for this plugin during watch, it
-            //        doesn't matter if something happens there.
-            this.promiseEsdoc(cmd, esdocArgs, esdocConfigDir, tmpFile, obj)
-            .then(response => {
-                console.log(chalk.yellow(`${pluginName}:`), 'Finished compiling.');
-                console.log(chalk.yellow(`${pluginName}:`), 'Total run time ', chalk.green(self.millisToMinutesAndSeconds(stats.endTime - stats.startTime)));
-            })
+            console.log(chalk.yellow(`${pluginName}:`), 'Finished.');
+            console.log(chalk.yellow(`${pluginName}:`), 'Total run time ', chalk.green(self.millisToMinutesAndSeconds(stats.endTime - stats.startTime)));
         });
 
     }
