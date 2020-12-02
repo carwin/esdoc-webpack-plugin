@@ -244,7 +244,6 @@ module.exports = class Plugin {
         }
         if ( esdoc.stderr.length > 0) {
             console.error('ERR toString', esdoc.stderr.toString());
-            // esdocErrors.forEach((value) => console.error(value));
             return new Error(chalk.yellow(`${this.pluginName}:`), 'Exited with code ' + esdoc.status);
         } else {
             console.log(chalk.yellow(`${this.pluginName}:`), 'Emitted files to output directory.');
@@ -280,17 +279,11 @@ module.exports = class Plugin {
             tmpFilepath;
 
         /**
-         * Hooks into emit using tap().
+         * Hooks into emit using tapAsync().
          *
-         * @external {compiler.hooks.shouldEmit} https://webpack.js.org/api/compiler-hooks/#shouldEmit
-         * @todo This would probably be better using the emit hook, but no matter
-         *       do it seems like it always forces two runs when watch mode is
-         *       started. Running ESDoc on the compile hook works, but eventually
-         *       it would be good to do this the webpack way with compilation
-         *       modules and chunks and stuff.
-         *       Everything works, but watch is annoying on startup.
+         * @external {compiler.hooks.emit} https://webpack.js.org/api/compiler-hooks/#emit
          */
-        compiler.hooks.compilation.tap(pluginName, (compilation) => {
+        compiler.hooks.emit.tapAsync(pluginName, (compilation, callback) => {
             // Let the user know ESDocPlugin is running.
             console.log(chalk.yellow(`${pluginName}:`), 'Compiling...');
 
@@ -371,21 +364,22 @@ module.exports = class Plugin {
 
             // End the emit hook.
             try {
-                this.Esdoc(cmd, esdocArgs, esdocConfigDir, tmpFile, obj)
+                this.Esdoc(cmd, esdocArgs, esdocConfigDir, tmpFile, obj);
             } catch (err) {
                 return new Error(pluginName, 'There was a problem running ESDoc.');
             }
+            callback();
         });
 
         /**
          * Hooks into done using tap().
          *
-         * @external {compiler.hooks.done.tapAsync} https://webpack.js.org/api/compiler-hooks/#done
+         * @external {compiler.hooks.done} https://webpack.js.org/api/compiler-hooks/#done
          */
         compiler.hooks.done.tap(pluginName, (stats) => {
-            console.log(chalk.yellow(`${pluginName}:`), 'Finished.');
             console.log(chalk.yellow(`${pluginName}:`), 'Total run time ', chalk.green(self.millisToMinutesAndSeconds(stats.endTime - stats.startTime)));
         });
 
     }
 };
+
