@@ -1,5 +1,6 @@
 # esdoc-webpack-plugin
-![A rectangle with colors indicating the state of coverage](https://doc.esdoc.org/github.com/carwin/esdoc-webpack-plugin/badge.svg)
+[![Downloads](https://badgen.net/npm/dt/esdoc-webpack-plugin)](https://www.npmjs.com/package/esdoc-webpack-plugin)
+[![npm dependents](https://badgen.net/npm/dependents/esdoc-webpack-plugin)](https://www.npmjs.com/package/esdoc-webpack-plugin)
 
 Run [`ESDoc`](https://esdoc.org) with Webpack!
 
