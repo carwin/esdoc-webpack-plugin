@@ -20,7 +20,7 @@
     "url": "https://github.com/carwin/esdoc-webpack-plugin/issues"
   },
   "dependencies": {
-    "chalk": "^2.0.0",
+    "chalk": "^2.4.2",
     "esdoc": "^1.1.0",
     "esdoc-ecmascript-proposal-plugin": "^1.0.0",
     "esdoc-node": "^1.0.5",
