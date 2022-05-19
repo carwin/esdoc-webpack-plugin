@@ -27,6 +27,6 @@
     "esdoc-standard-plugin": "^1.0.0",
     "fs-extra": "^5.0.0",
     "schema-utils": "^1.0.0",
-    "webpack-watch-files-plugin": "^1.2.0"
+    "webpack-watch-files-plugin": "^1.2.1"
   }
 }
